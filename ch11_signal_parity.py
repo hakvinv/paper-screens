@@ -1,7 +1,7 @@
 """
 Chapter 11: Signal Parity -- Price x Fundamentals
 The capstone chapter unifying Paper Trading (price signals) with
-Paper Plus (fundamental screens).
+Paper Screens (fundamental screens).
 
 P_i(t) = z(momentum_12) + z(momentum_3)     [price signal]
 F_i(t) = z(ROIC) + z(GP/TA) + z(EY)         [fundamental signal]
@@ -123,3 +123,99 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig('fig_ch11_signal_parity.png', dpi=150)
     plt.show()
+
+    # ---- BACKTEST: Signal Parity vs Price-Only vs Fundamental-Only ----
+    print("\n" + "=" * 60)
+    print("BACKTEST: Signal Parity (2015-2025)")
+    print("=" * 60)
+
+    # Download monthly price data for backtest period
+    print("Downloading backtest data...")
+    bt_data = yf.download(tickers, start="2014-01-01", auto_adjust=True)['Close']
+    if isinstance(bt_data.columns, pd.MultiIndex):
+        bt_data = bt_data.droplevel(0, axis=1)
+    bt_monthly = bt_data.resample('ME').last().dropna(axis=1, how='any')
+    bt_returns = bt_monthly.pct_change().dropna()
+
+    # Compute rolling signals each month
+    bt_mom12 = bt_monthly.pct_change(12)
+    bt_mom3 = bt_monthly.pct_change(3)
+
+    # For fundamentals: use cross-sectional rank as a simple static proxy
+    # (real implementation would refresh quarterly from EDGAR)
+    f_scores = F.reindex(bt_monthly.columns)
+
+    # Backtest: monthly rebalance, long top-5 equal-weight, short bottom-5
+    n_long = 5
+    n_short = 5
+    strategies = {'Price-Only': [], 'Fund-Only': [], 'Signal Parity (50/50)': []}
+    dates = []
+
+    for i in range(13, len(bt_monthly) - 1):
+        date = bt_monthly.index[i]
+        next_date = bt_monthly.index[i + 1]
+
+        avail = bt_mom12.columns.intersection(bt_returns.columns)
+        avail = avail.intersection(f_scores.dropna().index)
+        if len(avail) < n_long + n_short:
+            continue
+
+        # Price signal
+        p_sig = zscore(bt_mom12.loc[date, avail].dropna()) + zscore(bt_mom3.loc[date, avail].dropna())
+        p_sig = p_sig.dropna()
+        avail_final = p_sig.index.intersection(f_scores.dropna().index)
+        if len(avail_final) < n_long + n_short:
+            continue
+        p_sig = p_sig[avail_final]
+
+        # Fundamental signal (static cross-sectional z-scores)
+        f_sig = f_scores[avail_final]
+
+        # Unified signal (50/50)
+        u_sig = 0.5 * p_sig + 0.5 * f_sig
+
+        # Next month returns
+        if next_date not in bt_returns.index:
+            continue
+        next_ret = bt_returns.loc[next_date, avail_final]
+
+        for name, sig in [('Price-Only', p_sig), ('Fund-Only', f_sig),
+                          ('Signal Parity (50/50)', u_sig)]:
+            sig_clean = sig.dropna().sort_values(ascending=False)
+            if len(sig_clean) < n_long + n_short:
+                continue
+            longs = sig_clean.head(n_long).index
+            shorts = sig_clean.tail(n_short).index
+            long_ret = next_ret[longs].mean() if len(longs) > 0 else 0
+            short_ret = next_ret[shorts].mean() if len(shorts) > 0 else 0
+            ls_ret = long_ret - short_ret
+            strategies[name].append(ls_ret)
+
+        dates.append(next_date)
+
+    # Compute performance
+    print(f"\nBacktest: {len(dates)} months, long top-{n_long} / short bottom-{n_short}")
+    print(f"{'Strategy':<25} {'Ann Ret':>8} {'Ann Vol':>8} {'Sharpe':>8} {'MaxDD':>8}")
+    print("-" * 60)
+
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    for name, rets in strategies.items():
+        if len(rets) == 0:
+            continue
+        r = pd.Series(rets, index=dates[:len(rets)])
+        ann_r = r.mean() * 12
+        ann_v = r.std() * np.sqrt(12)
+        sharpe = ann_r / ann_v if ann_v > 0 else 0
+        cum = (1 + r).cumprod()
+        mdd = (cum / cum.cummax() - 1).min()
+        print(f"  {name:<23} {ann_r:>7.1%} {ann_v:>7.1%} {sharpe:>7.2f} {mdd:>7.1%}")
+        ax2.plot(cum.index, cum.values, label=f"{name} (SR={sharpe:.2f})")
+
+    ax2.set_ylabel('Growth of $1 (L/S)')
+    ax2.set_title('Signal Parity Backtest: Long Top-5 / Short Bottom-5')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('fig_ch11_backtest.png', dpi=150)
+    plt.show()
+    print("\nBacktest saved: fig_ch11_backtest.png")
