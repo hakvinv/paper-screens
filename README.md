@@ -6,4 +6,4 @@ Companion code for the Gumroad product **"Paper Screens: 10 Fundamental Screens 
 
 ## Author
 
-Hakvin Vosteen — [vosteen@uni-bremen.de](mailto:vosteen@uni-bremen.de)
+Hakvin Vosteen
